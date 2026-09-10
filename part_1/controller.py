@@ -45,7 +45,8 @@ constructor defaults. Tuning only inside ``run_case_part1.py`` will pass your
 own runs but fail the checks.
 """
 import numpy as np
-
+from simulation.utils import Rz, angle_diff
+from part_1.config import PIDGains
 
 class DPController:
     """
@@ -54,13 +55,21 @@ class DPController:
     Students may implement any type of controller (PID, LQR, backstepping,
     ...). Only compute() is required; everything else is optional.
     """
+    
 
     def __init__(self, *args, **kwargs):
-        pass
+        gains = PIDGains()
+        self.Kp = np.diag(gains.Kp)
+        self.Ki = np.diag(gains.Ki)
+        self.Kd = np.diag(gains.Kd)
+        self.int_ned = np.zeros(2)
+        self.int_psi = 0.0
 
     def reset(self) -> None:
         """Optional: reset internal states (integrators, filters) before a run."""
-        pass
+        #pass
+        self.int_ned = np.zeros(2)
+        self.int_psi = 0.0
 
     def compute(
         self,
@@ -71,8 +80,34 @@ class DPController:
         eta_ref: np.ndarray,
         nu_ref: np.ndarray | None = None,
         acc_ref: np.ndarray | None = None,
-    ) -> np.ndarray:
-        # TODO: Replace this placeholder with your DP controller.
-        # Return the (6,) desired BODY wrench — fill in tau_d[0] = Fx,
-        # tau_d[1] = Fy, tau_d[5] = Mz and leave the rest zero.
-        return np.zeros(6)
+    ):
+        psi = eta[5]
+        R = Rz(psi) # NED = R @ body (3x3) -> [N,E,psi]
+
+        #position/heading error, NED -> BODY
+        e_ned = np.array([eta_ref[0]-eta[0],
+                          eta_ref[1]-eta[1],
+                          angle_diff(eta_ref[5], eta[5])
+                          ])
+        e_body = R.T @ e_ned
+
+        #velocity error, already BODY coord.
+        e_nu = np.array([nu_ref[0]-nu[0],
+                         nu_ref[1]-nu[1],
+                         nu_ref[5]-nu[5]
+                         ])
+
+        # integral (kept in NED, then rotated)
+        self.int_ned += e_ned[:2] * dt
+        self.int_psi += e_ned[2] * dt
+        i_ned = np.array([self.int_ned[0],
+                          self.int_ned[1],
+                          self.int_psi
+                          ])
+        i_body = R.T @ i_ned
+
+        tau3 = self.Kp @ e_body + self.Kd @ e_nu + self.Ki @ i_body
+
+        tau_d = np.zeros(6)
+        tau_d[0], tau_d[1], tau_d[5] = tau3
+        return tau_d
